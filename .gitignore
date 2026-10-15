@@ -1,0 +1,10 @@
+.DS_Store
+.python-version.local
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
