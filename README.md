@@ -7,18 +7,22 @@ reproduce all of Redis.
 
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
 
-## Current status
+## Current status: Milestone 1
 
-Milestone 0 establishes the project foundation:
+Mini Redis currently provides:
 
 - a Python 3.12+ package using a `src` layout;
 - project and dependency management with `uv`;
-- a minimal command-line entry point;
+- a synchronous TCP server listening on `127.0.0.1:6379` by default;
+- a temporary CRLF-terminated line protocol supporting `PING`/`PONG`;
+- correct buffering when a command is split across TCP reads;
+- sequential client connections;
 - tests with pytest; and
 - formatting and linting with Ruff.
 
-The TCP server begins in Milestone 1. This project is not production-ready and
-must not be exposed to untrusted networks.
+The server handles one active client at a time. Concurrent clients, storage, and
+the RESP2 protocol belong to later milestones. This project is not
+production-ready and must not be exposed to untrusted networks.
 
 ## Development
 
@@ -28,11 +32,20 @@ Create the environment and install development dependencies:
 uv sync --dev
 ```
 
-Inspect the command-line interface:
+Inspect the command-line interface and start the server:
 
 ```shell
 uv run mini-redis --help
+uv run mini-redis
 ```
+
+From another terminal, send a PING with netcat:
+
+```shell
+printf 'PING\r\n' | nc 127.0.0.1 6379
+```
+
+The response should be `PONG`. Press Ctrl-C in the server terminal to stop it.
 
 Run the quality checks:
 

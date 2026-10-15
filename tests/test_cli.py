@@ -23,16 +23,17 @@ def test_help_describes_the_project() -> None:
     assert result.returncode == 0
     assert "usage: mini-redis" in result.stdout
     assert "Redis-inspired server" in result.stdout
-    assert "Milestone 1" in result.stdout
+    assert "--host" in result.stdout
+    assert "--port" in result.stdout
     assert result.stderr == ""
 
 
-def test_no_arguments_prints_help() -> None:
-    result = run_cli()
+def test_invalid_port_is_rejected() -> None:
+    result = run_cli("--port", "70000")
 
-    assert result.returncode == 0
-    assert "usage: mini-redis" in result.stdout
-    assert result.stderr == ""
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "port must be between 0 and 65535" in result.stderr
 
 
 def test_version_is_available() -> None:
