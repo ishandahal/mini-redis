@@ -1,9 +1,13 @@
 # Mini Redis: Implementation Plan and Specification
 
-- **Status:** Proposed specification
+- **Status:** Active living specification; Milestones 0–1 complete
 - **Target:** Version 1 learning implementation
 - **Language:** Python 3.12+
-**Last updated:** 2026-10-15
+- **Last updated:** 2026-10-26
+
+Sections 4–15 describe the target version 1 system, not only the features that
+exist today. Section 16 is the implementation tracker. Completed milestones are
+marked with checked boxes; later milestones are labeled `Not started`.
 
 ## 1. Purpose
 
@@ -684,37 +688,37 @@ Each milestone should be implemented as a small vertical slice. Do not begin a
 later milestone merely because the happy path works; meet its exit criteria and
 record the important lesson first.
 
-### Milestone 0: Project foundation
+### Milestone 0: Project foundation — Complete
 
 Deliver:
 
-- package and test layout;
-- CLI entry point;
-- formatter/linter/test configuration; and
-- a short README linking to this specification.
+- [x] package and test layout;
+- [x] CLI entry point;
+- [x] formatter/linter/test configuration; and
+- [x] a short README linking to this specification.
 
 Exit criteria:
 
-- a clean environment can install the project and run the test suite;
-- the empty server command provides useful `--help` output.
+- [x] a clean environment can install the project and run the test suite;
+- [x] the CLI provides useful `--help` output.
 
-### Milestone 1: One-client `PING`
+### Milestone 1: One-client `PING` — Complete
 
 Deliver:
 
-- raw TCP listener;
-- one connection at a time;
-- temporary CRLF line framing;
-- `PING`/`PONG`; and
-- a real socket integration test.
+- [x] raw TCP listener;
+- [x] one connection at a time;
+- [x] temporary CRLF line framing;
+- [x] `PING`/`PONG`; and
+- [x] a real socket integration test.
 
 Exit criteria:
 
-- fragmented `PING\r\n` works;
-- disconnects release resources;
-- the test does not depend on a hard-coded available port.
+- [x] fragmented `PING\r\n` works;
+- [x] disconnects release resources;
+- [x] the test does not depend on a hard-coded available port.
 
-### Milestone 2: In-memory command core
+### Milestone 2: In-memory command core — Not started
 
 Deliver:
 
@@ -727,7 +731,7 @@ Exit criteria:
 - two sequential connections observe the same state;
 - networking code contains no direct dictionary operations.
 
-### Milestone 3: RESP2 streaming protocol
+### Milestone 3: RESP2 streaming protocol — Not started
 
 Deliver:
 
@@ -742,7 +746,7 @@ Exit criteria:
 - binary keys and values round-trip;
 - supported commands work through `redis-cli`.
 
-### Milestone 4: Concurrent clients
+### Milestone 4: Concurrent clients — Not started
 
 Deliver:
 
@@ -757,7 +761,7 @@ Exit criteria:
 - a stalled client does not prevent another client from completing commands;
 - no socket I/O occurs under the global service lock.
 
-### Milestone 5: Expiration
+### Milestone 5: Expiration — Not started
 
 Deliver:
 
@@ -772,7 +776,7 @@ Exit criteria:
 - expired keys are never observable;
 - replacing a key has the specified TTL behavior.
 
-### Milestone 6: Append-only persistence
+### Milestone 6: Append-only persistence — Not started
 
 Deliver:
 
@@ -788,7 +792,7 @@ Exit criteria:
 - expired state is not resurrected;
 - corruption and partial-write behaviors are tested and documented.
 
-### Milestone 7: Operational hardening
+### Milestone 7: Operational hardening — Not started
 
 Deliver:
 
@@ -806,7 +810,7 @@ Exit criteria:
 - expected client mistakes do not produce server crashes;
 - logs explain startup, recovery, important failures, and shutdown.
 
-### Milestone 8: Review and explanation
+### Milestone 8: Review and explanation — Not started
 
 Deliver:
 
