@@ -28,7 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mini-redis",
         description=(
             "A Redis-inspired server built to learn backend and systems engineering. "
-            "Milestone 1 implements the temporary PING line protocol."
+            "Milestone 2 implements an in-memory command core behind a temporary "
+            "line protocol."
         ),
     )
     parser.add_argument(

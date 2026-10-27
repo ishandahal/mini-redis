@@ -6,10 +6,17 @@ import socket
 import threading
 from contextlib import suppress
 
+from mini_redis.commands import (
+    BulkString,
+    CommandError,
+    CommandProcessor,
+    CommandResult,
+    Integer,
+    SimpleString,
+)
+from mini_redis.store import Store
+
 COMMAND_TERMINATOR = b"\r\n"
-PING_COMMAND = b"PING"
-PONG_RESPONSE = b"PONG\r\n"
-UNKNOWN_COMMAND_RESPONSE = b"ERROR unknown command\r\n"
 
 
 class MiniRedisServer:
@@ -20,9 +27,15 @@ class MiniRedisServer:
     assigned port before starting the blocking accept loop.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 6379) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 6379,
+        store: Store | None = None,
+    ) -> None:
         self._host = host
         self._port = port
+        self._commands = CommandProcessor(store if store is not None else Store())
         self._listener: socket.socket | None = None
         self._active_client: socket.socket | None = None
         self._stopping = threading.Event()
@@ -108,19 +121,30 @@ class MiniRedisServer:
                 buffer.extend(chunk)
                 self._respond_to_complete_commands(connection, buffer)
 
-    @staticmethod
     def _respond_to_complete_commands(
-        connection: socket.socket, buffer: bytearray
+        self, connection: socket.socket, buffer: bytearray
     ) -> None:
         """Consume and respond to every complete command currently buffered."""
         while (terminator_index := buffer.find(COMMAND_TERMINATOR)) != -1:
             command = bytes(buffer[:terminator_index])
             del buffer[: terminator_index + len(COMMAND_TERMINATOR)]
 
-            if command.upper() == PING_COMMAND:
-                connection.sendall(PONG_RESPONSE)
-            else:
-                connection.sendall(UNKNOWN_COMMAND_RESPONSE)
+            result = self._commands.execute(tuple(command.split()))
+            connection.sendall(_encode_temporary_response(result))
+
+
+def _encode_temporary_response(result: CommandResult) -> bytes:
+    """Encode a command result for the disposable Milestone 2 line protocol."""
+    if isinstance(result, SimpleString):
+        return result.value + COMMAND_TERMINATOR
+    if isinstance(result, BulkString):
+        value = result.value if result.value is not None else b"NULL"
+        return value + COMMAND_TERMINATOR
+    if isinstance(result, Integer):
+        return str(result.value).encode("ascii") + COMMAND_TERMINATOR
+    if isinstance(result, CommandError):
+        return b"ERROR " + result.message.encode("ascii") + COMMAND_TERMINATOR
+    raise AssertionError(f"unsupported command result: {result!r}")
 
 
 def _close_socket(sock: socket.socket) -> None:

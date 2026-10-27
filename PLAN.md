@@ -1,6 +1,6 @@
 # Mini Redis: Implementation Plan and Specification
 
-- **Status:** Active living specification; Milestones 0–1 complete
+- **Status:** Active living specification; Milestones 0–2 complete
 - **Target:** Version 1 learning implementation
 - **Language:** Python 3.12+
 - **Last updated:** 2026-10-26
@@ -718,18 +718,18 @@ Exit criteria:
 - [x] disconnects release resources;
 - [x] the test does not depend on a hard-coded available port.
 
-### Milestone 2: In-memory command core — Not started
+### Milestone 2: In-memory command core — Complete
 
 Deliver:
 
-- separated command and store layers;
-- `SET`, `GET`, and `DEL`; and
-- focused unit tests independent of sockets.
+- [x] separated command and store layers;
+- [x] `SET`, `GET`, and `DEL`; and
+- [x] focused unit tests independent of sockets.
 
 Exit criteria:
 
-- two sequential connections observe the same state;
-- networking code contains no direct dictionary operations.
+- [x] two sequential connections observe the same state;
+- [x] networking code contains no direct dictionary operations.
 
 ### Milestone 3: RESP2 streaming protocol — Not started
 

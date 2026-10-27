@@ -7,7 +7,7 @@ reproduce all of Redis.
 
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
 
-## Current status: Milestone 1
+## Current status: Milestone 2
 
 Mini Redis currently provides:
 
@@ -17,6 +17,8 @@ Mini Redis currently provides:
 - a temporary CRLF-terminated line protocol supporting `PING`/`PONG`;
 - correct buffering when a command is split across TCP reads;
 - case-insensitive command matching and an error response for unknown commands;
+- an in-memory byte-string store shared across sequential connections;
+- socket-independent command handling for `PING`, `SET`, `GET`, and `DEL`;
 - multiple commands over the same connection;
 - sequential client connections;
 - tests with pytest; and
@@ -24,9 +26,9 @@ Mini Redis currently provides:
 
 The server handles one active client at a time. An idle connected client blocks
 later clients from being processed until it disconnects. There are not yet
-request-size limits. Concurrent clients, storage, and the RESP2 protocol belong
-to later milestones. This project is not production-ready and must not be
-exposed to untrusted networks.
+request-size limits. Concurrent clients and the RESP2 protocol belong to later
+milestones. This project is not production-ready and must not be exposed to
+untrusted networks.
 
 ## Development
 
@@ -73,15 +75,20 @@ require additional operating-system permissions.
 ### Temporary protocol
 
 Commands are ASCII lines terminated by `\r\n`. Command names are matched
-case-insensitively:
+case-insensitively, and arguments are separated by ASCII whitespace:
 
 ```text
-PING\r\n  -> PONG\r\n
-hello\r\n -> ERROR unknown command\r\n
+PING\r\n               -> PONG\r\n
+SET greeting hello\r\n -> OK\r\n
+GET greeting\r\n       -> hello\r\n
+DEL greeting\r\n       -> 1\r\n
+GET greeting\r\n       -> NULL\r\n
+hello\r\n              -> ERROR unknown command\r\n
 ```
 
 This line protocol is temporary and will be replaced by the RESP2 subset in
-Milestone 3.
+Milestone 3. It cannot represent empty arguments or arguments containing
+whitespace; RESP2 will add unambiguous framing for arbitrary byte strings.
 
 Run the quality checks:
 

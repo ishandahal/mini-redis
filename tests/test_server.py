@@ -81,3 +81,20 @@ def test_unknown_command_does_not_end_the_connection() -> None:
         client.sendall(b"PING\r\n")
 
         assert receive_until_crlf(client) == b"PONG\r\n"
+
+
+def test_sequential_connections_share_command_state() -> None:
+    with running_server() as address:
+        with socket.create_connection(address, timeout=1) as first_client:
+            first_client.sendall(b"SET greeting hello\r\n")
+            assert receive_until_crlf(first_client) == b"OK\r\n"
+
+        with socket.create_connection(address, timeout=1) as second_client:
+            second_client.sendall(b"GET greeting\r\n")
+            assert receive_until_crlf(second_client) == b"hello\r\n"
+
+            second_client.sendall(b"DEL greeting greeting\r\n")
+            assert receive_until_crlf(second_client) == b"1\r\n"
+
+            second_client.sendall(b"GET greeting\r\n")
+            assert receive_until_crlf(second_client) == b"NULL\r\n"
