@@ -7,28 +7,31 @@ reproduce all of Redis.
 
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
 
-## Current status: Milestone 2
+## Current status: Milestone 3
 
 Mini Redis currently provides:
 
 - a Python 3.12+ package using a `src` layout;
 - project and dependency management with `uv`;
 - a synchronous TCP server listening on `127.0.0.1:6379` by default;
-- a temporary CRLF-terminated line protocol supporting `PING`/`PONG`;
-- correct buffering when a command is split across TCP reads;
+- an incremental RESP2 array-of-bulk-strings request parser;
+- RESP2 simple-string, error, integer, bulk-string, and null response encoding;
+- correct buffering when requests are split across arbitrary TCP reads;
+- pipelined execution of multiple requests received together;
+- binary-safe keys and values, including empty byte strings;
+- per-connection buffer, bulk-string, and request-array limits;
 - case-insensitive command matching and an error response for unknown commands;
 - an in-memory byte-string store shared across sequential connections;
 - socket-independent command handling for `PING`, `SET`, `GET`, and `DEL`;
-- multiple commands over the same connection;
+- compatibility with `redis-cli` for the supported command subset;
 - sequential client connections;
 - tests with pytest; and
 - formatting and linting with Ruff.
 
 The server handles one active client at a time. An idle connected client blocks
-later clients from being processed until it disconnects. There are not yet
-request-size limits. Concurrent clients and the RESP2 protocol belong to later
-milestones. This project is not production-ready and must not be exposed to
-untrusted networks.
+later clients from being processed until it disconnects. Concurrent clients,
+expiration, and persistence belong to later milestones. This project is not
+production-ready and must not be exposed to untrusted networks.
 
 ## Development
 
@@ -45,13 +48,18 @@ uv run mini-redis --help
 uv run mini-redis
 ```
 
-From another terminal, send a PING with netcat:
+From another terminal, send a RESP2-encoded `PING` with netcat:
 
 ```shell
-printf 'PING\r\n' | nc 127.0.0.1 6379
+printf '*1\r\n$4\r\nPING\r\n' | nc 127.0.0.1 6379
 ```
 
-The response should be `PONG`. Press Ctrl-C in the server terminal to stop it.
+The response should be `+PONG`. Press Ctrl-C in the server terminal to stop it.
+If `redis-cli` is installed locally, the equivalent compatibility check is:
+
+```shell
+redis-cli -h 127.0.0.1 -p 6379 PING
+```
 
 ### Host and port
 
@@ -72,23 +80,30 @@ system to select an available ephemeral port; the server prints the selected
 port after it starts. Other ports must be available, and privileged ports may
 require additional operating-system permissions.
 
-### Temporary protocol
+### RESP2 subset
 
-Commands are ASCII lines terminated by `\r\n`. Command names are matched
-case-insensitively, and arguments are separated by ASCII whitespace:
+Requests are RESP2 arrays containing bulk strings. Command names are matched
+case-insensitively; keys and values are opaque bytes. For example,
+`SET greeting hello` is encoded as:
 
 ```text
-PING\r\n               -> PONG\r\n
-SET greeting hello\r\n -> OK\r\n
-GET greeting\r\n       -> hello\r\n
-DEL greeting\r\n       -> 1\r\n
-GET greeting\r\n       -> NULL\r\n
-hello\r\n              -> ERROR unknown command\r\n
+*3\r\n
+$3\r\n
+SET\r\n
+$8\r\n
+greeting\r\n
+$5\r\n
+hello\r\n
 ```
 
-This line protocol is temporary and will be replaced by the RESP2 subset in
-Milestone 3. It cannot represent empty arguments or arguments containing
-whitespace; RESP2 will add unambiguous framing for arbitrary byte strings.
+The server accepts fragmented and pipelined requests. A malformed frame receives
+a RESP2 error when possible and closes that connection. A well-formed request
+with an unknown command or invalid argument count receives an error while
+keeping the connection usable.
+
+The initial per-connection limits are a 1 MiB unread-input buffer, 512 KiB bulk
+strings, and 1,024 request-array elements. These learning-oriented limits are
+not Redis-compatible limits.
 
 Run the quality checks:
 

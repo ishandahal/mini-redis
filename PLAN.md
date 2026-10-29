@@ -1,9 +1,9 @@
 # Mini Redis: Implementation Plan and Specification
 
-- **Status:** Active living specification; Milestones 0–2 complete
+- **Status:** Active living specification; Milestones 0–3 complete
 - **Target:** Version 1 learning implementation
 - **Language:** Python 3.12+
-- **Last updated:** 2026-10-26
+- **Last updated:** 2026-10-28
 
 Sections 4–15 describe the target version 1 system, not only the features that
 exist today. Section 16 is the implementation tracker. Completed milestones are
@@ -731,20 +731,20 @@ Exit criteria:
 - [x] two sequential connections observe the same state;
 - [x] networking code contains no direct dictionary operations.
 
-### Milestone 3: RESP2 streaming protocol — Not started
+### Milestone 3: RESP2 streaming protocol — Complete
 
 Deliver:
 
-- incremental RESP2 request parser;
-- RESP2 response encoder;
-- protocol limits; and
-- removal of the temporary line protocol.
+- [x] incremental RESP2 request parser;
+- [x] RESP2 response encoder;
+- [x] protocol limits; and
+- [x] removal of the temporary line protocol.
 
 Exit criteria:
 
-- arbitrary fragmentation and pipelining tests pass;
-- binary keys and values round-trip;
-- supported commands work through `redis-cli`.
+- [x] arbitrary fragmentation and pipelining tests pass;
+- [x] binary keys and values round-trip;
+- [x] supported commands work through `redis-cli`.
 
 ### Milestone 4: Concurrent clients — Not started
 
