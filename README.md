@@ -7,7 +7,7 @@ reproduce all of Redis.
 
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
 
-## Current status: Milestone 5
+## Current status: Milestone 6
 
 Mini Redis currently provides:
 
@@ -28,13 +28,13 @@ Mini Redis currently provides:
 - a shared service lock making each keyspace operation atomic;
 - a configurable maximum of 100 active clients by default;
 - lazy expiration and bounded background cleanup using an injectable clock;
+- optional append-only persistence with synchronous disk writes and startup replay;
 - tests with pytest; and
 - formatting and linting with Ruff.
 
 Each connection has its own worker and input buffer. An idle client does not
 block other clients. Commands remain ordered within a connection; ordering
-between connections is unspecified. Key expiration is supported; persistence
-belongs to a later milestone. This project is not production-ready and must not be exposed to
+between connections is unspecified. Key expiration and optional persistence are supported. This project is not production-ready and must not be exposed to
 untrusted networks.
 
 ## Development
@@ -184,9 +184,51 @@ preserves it. Incrementing an expired key creates a value of `1` with no TTL.
 
 Live expiration uses a monotonic clock, so calendar-clock changes do not change
 an existing lifetime. Entries also record a Unix expiration timestamp for future
-persistence work; data is still entirely in memory and is lost on restart.
+persistence. Without `--appendonly`, data is entirely in memory and lost on restart.
 Every key operation checks expiration. A maintenance thread additionally inspects
 up to 100 entries every 100 milliseconds, rotating through the store and taking
 the service lock for just one batch. Cleanup reclaims memory; correctness does
 not depend on it running promptly. Server close stops and joins this worker.
 Expiration tests advance a fake clock instead of waiting for real TTLs.
+
+### Append-only persistence
+
+Enable persistence by choosing a log file (its parent directory must exist):
+
+```shell
+uv run mini-redis --appendonly ./mini-redis.aof
+```
+
+Restart with the same path to recover data before the server accepts connections.
+Without this option the server remains memory-only. Use one server process per
+log file; concurrent processes sharing a file are unsupported.
+
+Successful mutations append binary-safe RESP2 records using internal `PUT` and
+`DELETE` operations. `PUT` records contain the resulting value and an absolute
+Unix expiration in milliseconds (`-1` means no expiration). These operations
+are not public commands. Reads, failed validation, missing-key no-ops, and
+expiration cleanup do not append records.
+
+The service lock covers preparing the mutation, writing its record, flushing,
+calling `fsync`, and applying the result to memory. A success response follows
+these steps. Every mutation pays the disk-sync cost, and other keyspace commands
+wait while it completes. Persisted expiration is rounded down to milliseconds;
+replay uses wall-clock time to account for downtime, then resumes monotonic
+expiration. An expired replacement also removes any older value during replay.
+
+An incomplete final record is logged and truncated before new records are
+appended. Malformed framing or invalid complete records cause startup to fail;
+the log is not silently repaired. Back up a corrupt log before manual recovery.
+The format has no checksum, so corruption that still forms valid records is not
+detectable. The log grows indefinitely; compaction is not implemented.
+
+If append, flush, or `fsync` fails, memory is not changed by that command and all
+further mutations are rejected until restart. Reads remain available. A failed
+or unacknowledged mutation may nevertheless appear after restart if its record
+reached disk: callers must not assume an error proves the write never happened.
+This is not an exactly-once guarantee or a hardware-level durability guarantee.
+
+Closing the server closes the log under the service lock. An in-progress disk
+operation must finish before the file can close; a stalled filesystem can exceed
+the existing worker join budget. Full signal handling and shutdown hardening
+remain milestone 7.

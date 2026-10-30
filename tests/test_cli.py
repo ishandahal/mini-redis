@@ -48,3 +48,13 @@ def test_invalid_client_limit_is_rejected() -> None:
     result = run_cli("--max-clients", "0")
     assert result.returncode == 2
     assert "must be a positive integer" in result.stderr
+
+
+def test_corrupt_log_fails_startup_without_traceback(tmp_path):
+    path = tmp_path / "corrupt.aof"
+    path.write_bytes(b"garbage")
+    result = run_cli("--appendonly", str(path), "--port", "0")
+    assert result.returncode == 1
+    assert "unable to start server" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "listening" not in result.stdout

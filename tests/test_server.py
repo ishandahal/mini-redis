@@ -329,3 +329,57 @@ def test_background_cleanup_reclaims_unread_keys_and_stops(clock):
     finally:
         server.close()
     assert worker is not None and not worker.is_alive()
+
+
+def test_persistent_commands_survive_tcp_server_restart(tmp_path, clock):
+    from mini_redis.store import Store
+
+    path = str(tmp_path / "data.aof")
+    with (
+        running_server(appendonly=path, store=Store(clock)) as address,
+        socket.create_connection(address, timeout=2) as client,
+    ):
+        client.sendall(
+            encode_request(b"SET", b"counter", b"3", b"EX", b"60")
+            + encode_request(b"INCR", b"counter")
+        )
+        assert receive_exactly(client, 9) == b"+OK\r\n:4\r\n"
+    clock.advance(10)
+    with (
+        running_server(appendonly=path, store=Store(clock)) as address,
+        socket.create_connection(address, timeout=2) as client,
+    ):
+        client.sendall(
+            encode_request(b"GET", b"counter") + encode_request(b"TTL", b"counter")
+        )
+        expected = b"$1\r\n4\r\n:50\r\n"
+        assert receive_exactly(client, len(expected)) == expected
+
+
+def test_persistence_failure_returns_error_but_connection_can_read(
+    tmp_path, monkeypatch
+):
+    from mini_redis.persistence import AppendOnlyLog
+
+    with (
+        running_server(appendonly=str(tmp_path / "data.aof")) as address,
+        socket.create_connection(address, timeout=2) as client,
+    ):
+        client.sendall(encode_request(b"SET", b"key", b"old"))
+        assert receive_exactly(client, 5) == b"+OK\r\n"
+
+        def fail_sync(self):
+            raise OSError("injected disk failure")
+
+        monkeypatch.setattr(AppendOnlyLog, "_sync", fail_sync)
+        client.sendall(
+            encode_request(b"SET", b"key", b"new")
+            + encode_request(b"GET", b"key")
+            + encode_request(b"DEL", b"key")
+        )
+        expected = (
+            b"-ERR persistence write failed; mutations disabled\r\n"
+            b"$3\r\nold\r\n"
+            b"-ERR persistence unavailable; mutations disabled\r\n"
+        )
+        assert receive_exactly(client, len(expected)) == expected

@@ -51,6 +51,42 @@ class Store:
             entry = Entry(value)
         self._entries[key] = entry
 
+    def prepare(self, value: bytes, seconds: int | None = None) -> Entry:
+        """Prepare a replacement without exposing it before persistence succeeds."""
+        if seconds is None:
+            return Entry(value)
+        self._validate_seconds(seconds)
+        return Entry(
+            value,
+            self._clock.monotonic() + seconds,
+            self._clock.wall_time() + seconds,
+        )
+
+    def entry(self, key: bytes) -> Entry | None:
+        return self._live_entry(key, self._clock.monotonic())
+
+    def existing_keys(self, keys: tuple[bytes, ...]) -> tuple[bytes, ...]:
+        now = self._clock.monotonic()
+        return tuple(
+            dict.fromkeys(key for key in keys if self._live_entry(key, now) is not None)
+        )
+
+    def apply(self, key: bytes, entry: Entry) -> None:
+        self._entries[key] = entry
+
+    def restore(self, key: bytes, value: bytes, expires_at: float | None) -> None:
+        if expires_at is None:
+            self._entries[key] = Entry(value)
+            return
+        remaining = expires_at - self._clock.wall_time()
+        if remaining <= 0:
+            # An expired replacement must also suppress an older value of this key.
+            self._entries.pop(key, None)
+        else:
+            self._entries[key] = Entry(
+                value, self._clock.monotonic() + remaining, expires_at
+            )
+
     def _live_entry(self, key: bytes, now: float) -> Entry | None:
         entry = self._entries.get(key)
         if entry is not None and entry.deadline is not None and now >= entry.deadline:

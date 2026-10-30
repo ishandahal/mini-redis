@@ -9,6 +9,7 @@ import time
 from contextlib import suppress
 
 from mini_redis.commands import CommandProcessor
+from mini_redis.persistence import AppendOnlyLog
 from mini_redis.protocol import (
     DEFAULT_MAX_ARRAY_LENGTH,
     DEFAULT_MAX_BUFFER_SIZE,
@@ -44,13 +45,16 @@ class MiniRedisServer:
         max_bulk_string_size: int = DEFAULT_MAX_BULK_STRING_SIZE,
         max_array_length: int = DEFAULT_MAX_ARRAY_LENGTH,
         max_clients: int = 100,
+        appendonly: str | None = None,
     ) -> None:
         if max_clients <= 0:
             raise ValueError("maximum clients must be positive")
         self._max_clients = max_clients
         self._host = host
         self._port = port
-        self._service = Service(store)
+        self._store = store if store is not None else Store()
+        self._appendonly = appendonly
+        self._service = Service(self._store)
         self._commands = CommandProcessor(self._service)
         self._maintenance: threading.Thread | None = None
         self._max_buffer_size = max_buffer_size
@@ -75,13 +79,28 @@ class MiniRedisServer:
         if self._listener is not None:
             raise RuntimeError("server has already been started")
 
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if self._appendonly is not None:
+            log = AppendOnlyLog(self._appendonly)
+            try:
+                log.replay(self._store)
+            except Exception:
+                log.close()
+                raise
+            self._service = Service(self._store, log)
+            self._commands = CommandProcessor(self._service)
+
+        try:
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        except OSError:
+            self._service.close()
+            raise
         try:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self._host, self._port))
             listener.listen(self._max_clients)
         except OSError:
             listener.close()
+            self._service.close()
             raise
 
         self._stopping.clear()
@@ -164,6 +183,8 @@ class MiniRedisServer:
             self._maintenance.join(timeout=max(0, deadline - time.monotonic()))
         for _, worker in clients:
             worker.join(timeout=max(0, deadline - time.monotonic()))
+
+        self._service.close()
 
     def _run_client(self, connection: socket.socket) -> None:
         """Isolate client failures and always release the admission slot."""

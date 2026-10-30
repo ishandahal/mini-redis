@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mini-redis",
         description=(
             "A Redis-inspired server built to learn backend and systems engineering. "
-            "Milestone 5 adds key expiration and background cleanup to the concurrent "
+            "Milestone 6 adds optional append-only persistence to the concurrent "
             "in-memory server."
         ),
     )
@@ -65,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=100,
         help="maximum simultaneous clients (default: %(default)s)",
     )
+    parser.add_argument(
+        "--appendonly", metavar="PATH", help="durable append-only log path"
+    )
     return parser
 
 
@@ -73,7 +76,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     server = MiniRedisServer(
-        host=arguments.host, port=arguments.port, max_clients=arguments.max_clients
+        host=arguments.host,
+        port=arguments.port,
+        max_clients=arguments.max_clients,
+        appendonly=arguments.appendonly,
     )
 
     try:

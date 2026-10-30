@@ -1,6 +1,6 @@
 # Mini Redis: Implementation Plan and Specification
 
-- **Status:** Active living specification; Milestones 0–5 complete
+- **Status:** Active living specification; Milestones 0–6 complete
 - **Target:** Version 1 learning implementation
 - **Language:** Python 3.12+
 - **Last updated:** 2026-10-30
@@ -808,21 +808,40 @@ Implementation decisions and lesson:
   and cleanup worker lifecycle. Background reclamation is never required for
   observable expiration correctness.
 
-### Milestone 6: Append-only persistence — Not started
+### Milestone 6: Append-only persistence — Complete
 
 Deliver:
 
-- canonical binary-safe records;
-- synchronous append and replay;
-- absolute persisted expiration;
-- tail-truncation handling; and
-- read-only degraded behavior after persistence failure.
+- [x] canonical binary-safe records;
+- [x] synchronous append and replay;
+- [x] absolute persisted expiration;
+- [x] tail-truncation handling; and
+- [x] read-only degraded behavior after persistence failure.
 
 Exit criteria:
 
-- acknowledged state survives restart;
-- expired state is not resurrected;
-- corruption and partial-write behaviors are tested and documented.
+- [x] acknowledged state survives restart;
+- [x] expired state is not resurrected;
+- [x] corruption and partial-write behaviors are tested and documented.
+
+
+Implementation decisions and lesson:
+
+- `--appendonly PATH` enables synchronous `PUT`/`DELETE` records; replay finishes
+  before the listener opens. The service lock orders log writes and memory changes.
+- File flush and `fsync` precede memory application and acknowledgment. A disk
+  failure disables further mutations until restart while reads remain available.
+- Absolute millisecond expirations account for downtime. An expired replacement
+  suppresses older values rather than resurrecting them during replay.
+- Recovery truncates an incomplete final suffix before appending. Invalid complete
+  records or malformed framing fail startup. The format does not detect corruption
+  that remains syntactically and semantically valid.
+- Tests cover binary round trips, concurrent mutation ordering, TCP restart,
+  expiration, every truncation point, and partial-write/flush/fsync failures.
+- A durable record can exist without a success reply, including after an I/O error.
+  This ambiguity is part of the failure model; retries are not exactly-once.
+- The log is single-process, has no compaction, and synchronous disk operations can
+  delay shutdown beyond the worker join budget. Operational hardening remains next.
 
 ### Milestone 7: Operational hardening — Not started
 

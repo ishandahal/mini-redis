@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mini_redis.persistence import PersistenceError
 from mini_redis.service import InvalidInteger, Service
 from mini_redis.store import MAX_TTL_SECONDS
 
@@ -47,6 +48,12 @@ class CommandProcessor:
 
     def execute(self, request: tuple[bytes, ...]) -> CommandResult:
         """Execute one tokenized request without knowing its wire protocol."""
+        try:
+            return self._execute(request)
+        except PersistenceError as error:
+            return CommandError(str(error))
+
+    def _execute(self, request: tuple[bytes, ...]) -> CommandResult:
         if not request:
             return CommandError("unknown command")
 
