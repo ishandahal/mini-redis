@@ -22,13 +22,24 @@ def port_number(value: str) -> int:
     return port
 
 
+def positive_integer(value: str) -> int:
+    """Parse a positive client limit before opening the listener."""
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if result <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser without reading process-global arguments."""
     parser = argparse.ArgumentParser(
         prog="mini-redis",
         description=(
             "A Redis-inspired server built to learn backend and systems engineering. "
-            "Milestone 3 implements a streaming RESP2 protocol around an in-memory "
+            "Milestone 4 implements concurrent RESP2 clients around an atomic in-memory "
             "command core."
         ),
     )
@@ -48,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=port_number,
         help="TCP port on which to listen; 0 asks the OS to choose (default: %(default)s)",
     )
+    parser.add_argument(
+        "--max-clients",
+        type=positive_integer,
+        default=100,
+        help="maximum simultaneous clients (default: %(default)s)",
+    )
     return parser
 
 
@@ -55,7 +72,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the Mini Redis command-line interface."""
     parser = build_parser()
     arguments = parser.parse_args(argv)
-    server = MiniRedisServer(host=arguments.host, port=arguments.port)
+    server = MiniRedisServer(
+        host=arguments.host, port=arguments.port, max_clients=arguments.max_clients
+    )
 
     try:
         server.start()

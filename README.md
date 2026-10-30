@@ -7,13 +7,13 @@ reproduce all of Redis.
 
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
 
-## Current status: Milestone 3
+## Current status: Milestone 4
 
 Mini Redis currently provides:
 
 - a Python 3.12+ package using a `src` layout;
 - project and dependency management with `uv`;
-- a synchronous TCP server listening on `127.0.0.1:6379` by default;
+- a thread-per-client TCP server listening on `127.0.0.1:6379` by default;
 - an incremental RESP2 array-of-bulk-strings request parser;
 - RESP2 simple-string, error, integer, bulk-string, and null response encoding;
 - correct buffering when requests are split across arbitrary TCP reads;
@@ -21,17 +21,20 @@ Mini Redis currently provides:
 - binary-safe keys and values, including empty byte strings;
 - per-connection buffer, bulk-string, and request-array limits;
 - case-insensitive command matching and an error response for unknown commands;
-- an in-memory byte-string store shared across sequential connections;
-- socket-independent command handling for `PING`, `SET`, `GET`, and `DEL`;
+- an in-memory byte-string store shared across concurrent connections;
+- socket-independent command handling for `PING`, `SET`, `GET`, `DEL`, `EXISTS`,
+  and `INCR`;
 - compatibility with `redis-cli` for the supported command subset;
-- sequential client connections;
+- a shared service lock making each keyspace operation atomic;
+- a configurable maximum of 100 active clients by default;
 - tests with pytest; and
 - formatting and linting with Ruff.
 
-The server handles one active client at a time. An idle connected client blocks
-later clients from being processed until it disconnects. Concurrent clients,
-expiration, and persistence belong to later milestones. This project is not
-production-ready and must not be exposed to untrusted networks.
+Each connection has its own worker and input buffer. An idle client does not
+block other clients. Commands remain ordered within a connection; ordering
+between connections is unspecified. Expiration and persistence belong to later
+milestones. This project is not production-ready and must not be exposed to
+untrusted networks.
 
 ## Development
 
@@ -119,3 +122,39 @@ Apply automatic formatting and safe lint fixes with:
 uv run ruff format .
 uv run ruff check --fix .
 ```
+
+### Concurrent clients and atomic operations
+
+The command processor validates requests, then calls a shared `Service`. The
+service owns the store and holds one lock for each complete operation, including
+multi-key operations and the entire read/modify/write sequence of `INCR`.
+Socket reads and writes occur outside that lock. Worker failures are isolated,
+and disconnects release their client slot. Closing the server unblocks client
+sockets and joins workers with a shared two-second wait budget. Full
+signal-driven graceful shutdown remains milestone 7.
+
+Set a different client limit with:
+
+```shell
+uv run mini-redis --port 6380 --max-clients 20
+```
+
+When all slots are occupied, an additional connection receives
+`-ERR maximum clients reached` and closes. Existing clients keep working. The
+limit must be a positive integer. Idle timeouts are not implemented yet, so an
+idle connection occupies its slot until it disconnects or the server closes.
+
+`EXISTS key [key ...]` counts supplied existing keys, including duplicates.
+For example, if `key` exists, `EXISTS key key missing` returns `2`.
+
+`INCR key` treats a missing key as zero, increments it, stores decimal bytes,
+and returns the new integer. Existing values must use canonical signed decimal
+notation: `0`, or an optional minus followed by a nonzero digit and further
+digits. Leading zeros, `+`, `-0`, whitespace, decimal points, and non-ASCII digits
+are rejected. Both the existing value and result must fit signed 64-bit range.
+Errors leave the key unchanged.
+
+The concurrency tests coordinate clients with barriers/events and verify 800
+increments across eight clients without lost updates, continued progress with
+an idle client or blocked response writer, client-limit enforcement and slot
+reuse, and worker cleanup on shutdown.

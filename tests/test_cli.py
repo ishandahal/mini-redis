@@ -42,3 +42,9 @@ def test_version_is_available() -> None:
     assert result.returncode == 0
     assert result.stdout == "mini-redis 0.1.0\n"
     assert result.stderr == ""
+
+
+def test_invalid_client_limit_is_rejected() -> None:
+    result = run_cli("--max-clients", "0")
+    assert result.returncode == 2
+    assert "must be a positive integer" in result.stderr

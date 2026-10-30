@@ -150,3 +150,133 @@ def test_buffer_limit_returns_an_error_and_closes_the_connection() -> None:
 
         assert receive_exactly(client, len(response)) == response
         assert client.recv(1) == b""
+
+
+def test_idle_client_does_not_block_shared_state_access() -> None:
+    with (
+        running_server() as address,
+        socket.create_connection(address, timeout=2) as first,
+        socket.create_connection(address, timeout=2) as second,
+    ):
+        first.sendall(encode_request(b"SET", b"key", b"value"))
+        assert receive_exactly(first, 5) == b"+OK\r\n"
+        second.sendall(encode_request(b"GET", b"key"))
+        assert receive_exactly(second, 11) == b"$5\r\nvalue\r\n"
+        second.sendall(encode_request(b"EXISTS", b"key", b"missing", b"key"))
+        assert receive_exactly(second, 4) == b":2\r\n"
+
+
+def test_concurrent_increments_have_no_lost_updates() -> None:
+    import threading
+
+    clients, increments = 8, 100
+    barrier = threading.Barrier(clients)
+    with running_server() as address:
+
+        def increment() -> list[int]:
+            with (
+                socket.create_connection(address, timeout=5) as client,
+                client.makefile("rb") as replies,
+            ):
+                barrier.wait(timeout=5)
+                client.sendall(encode_request(b"INCR", b"counter") * increments)
+                return [int(replies.readline()[1:-2]) for _ in range(increments)]
+
+        with ThreadPoolExecutor(max_workers=clients) as pool:
+            results = list(pool.map(lambda _: increment(), range(clients)))
+        assert sorted(value for batch in results for value in batch) == list(
+            range(1, clients * increments + 1)
+        )
+        assert all(batch == sorted(batch) for batch in results)
+        with socket.create_connection(address, timeout=2) as client:
+            client.sendall(encode_request(b"GET", b"counter"))
+            assert receive_exactly(client, 9) == b"$3\r\n800\r\n"
+
+
+def test_client_limit_rejects_and_releases_slots(monkeypatch) -> None:
+    import threading
+
+    released = threading.Event()
+    original = MiniRedisServer._run_client
+
+    def tracked_worker(self, connection):
+        try:
+            original(self, connection)
+        finally:
+            released.set()
+
+    monkeypatch.setattr(MiniRedisServer, "_run_client", tracked_worker)
+    with running_server(max_clients=1) as address:
+        with socket.create_connection(address, timeout=2) as first:
+            first.sendall(encode_request(b"PING"))
+            assert receive_exactly(first, 7) == b"+PONG\r\n"
+            with socket.create_connection(address, timeout=2) as rejected:
+                error = b"-ERR maximum clients reached\r\n"
+                assert receive_exactly(rejected, len(error)) == error
+                assert rejected.recv(1) == b""
+            first.sendall(encode_request(b"PING"))
+            assert receive_exactly(first, 7) == b"+PONG\r\n"
+            # A protocol failure must release the slot just like a disconnect.
+            first.sendall(b"invalid\r\n")
+            error = b"-ERR Protocol error: expected an array\r\n"
+            assert receive_exactly(first, len(error)) == error
+            assert first.recv(1) == b""
+        assert released.wait(timeout=2)
+        with socket.create_connection(address, timeout=2) as replacement:
+            replacement.sendall(encode_request(b"PING"))
+            assert receive_exactly(replacement, 7) == b"+PONG\r\n"
+
+
+def test_close_unblocks_and_joins_idle_workers() -> None:
+    server = MiniRedisServer(port=0)
+    server.start()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        serving = pool.submit(server.serve_forever)
+        try:
+            with socket.create_connection(server.address, timeout=2) as client:
+                client.sendall(encode_request(b"PING"))
+                assert receive_exactly(client, 7) == b"+PONG\r\n"
+                with server._clients_lock:
+                    workers = list(server._clients.values())
+                server.close()
+                assert client.recv(1) == b""
+                assert all(not worker.is_alive() for worker in workers)
+                assert not server._clients
+                serving.result(timeout=2)
+        finally:
+            server.close()
+
+
+def test_blocked_response_write_does_not_hold_service_lock() -> None:
+    import threading
+
+    writing = threading.Event()
+    release = threading.Event()
+
+    class SlowConnection:
+        def sendall(self, data):
+            writing.set()
+            assert release.wait(timeout=3)
+
+    server = MiniRedisServer()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        blocked = pool.submit(
+            server._respond_to_complete_requests,
+            SlowConnection(),
+            bytearray(encode_request(b"INCR", b"counter")),
+        )
+        try:
+            assert writing.wait(timeout=2)
+            from mini_redis.commands import Integer
+
+            other = pool.submit(server._commands.execute, (b"INCR", b"counter"))
+            assert other.result(timeout=1) == Integer(2)
+        finally:
+            release.set()
+        assert blocked.result(timeout=2)
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_invalid_client_limit_fails_before_start(limit) -> None:
+    with pytest.raises(ValueError, match="maximum clients must be positive"):
+        MiniRedisServer(max_clients=limit)

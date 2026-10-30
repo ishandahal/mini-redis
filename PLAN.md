@@ -1,9 +1,9 @@
 # Mini Redis: Implementation Plan and Specification
 
-- **Status:** Active living specification; Milestones 0–3 complete
+- **Status:** Active living specification; Milestones 0–4 complete
 - **Target:** Version 1 learning implementation
 - **Language:** Python 3.12+
-- **Last updated:** 2026-10-28
+- **Last updated:** 2026-10-29
 
 Sections 4–15 describe the target version 1 system, not only the features that
 exist today. Section 16 is the implementation tracker. Completed milestones are
@@ -746,20 +746,33 @@ Exit criteria:
 - [x] binary keys and values round-trip;
 - [x] supported commands work through `redis-cli`.
 
-### Milestone 4: Concurrent clients — Not started
+### Milestone 4: Concurrent clients — Complete
 
 Deliver:
 
-- thread-per-client workers;
-- maximum-client enforcement;
-- service lock and explicit atomicity boundary; and
-- `EXISTS` and `INCR`.
+- [x] thread-per-client workers;
+- [x] maximum-client enforcement;
+- [x] service lock and explicit atomicity boundary; and
+- [x] `EXISTS` and `INCR`.
 
 Exit criteria:
 
-- concurrent increments have no lost updates;
-- a stalled client does not prevent another client from completing commands;
-- no socket I/O occurs under the global service lock.
+- [x] concurrent increments have no lost updates;
+- [x] a stalled client does not prevent another client from completing commands;
+- [x] no socket I/O occurs under the global service lock.
+
+Implementation decisions and lesson:
+
+- One shared service owns the store and serializes complete keyspace operations.
+  Client sockets and worker tracking use a separate registry lock. Concurrency
+  in the transport must not split a read-modify-write operation or put network
+  waits inside the state lock.
+- `--max-clients` defaults to 100. Excess connections receive an error and close;
+  worker cleanup releases their occupied slots even after protocol failures.
+- `INCR` accepts `0` or `-?[1-9][0-9]*`, within signed 64-bit range. It rejects
+  leading zeros, `+`, `-0`, whitespace, and overflow without changing state.
+- Tests cover concurrent increments, idle clients, blocked response writes,
+  admission limits, slot reuse, and joining idle workers during close.
 
 ### Milestone 5: Expiration — Not started
 

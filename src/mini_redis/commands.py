@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mini_redis.store import Store
+from mini_redis.service import InvalidInteger, Service
 
 
 @dataclass(frozen=True)
@@ -41,8 +41,8 @@ CommandResult = SimpleString | BulkString | Integer | CommandError
 class CommandProcessor:
     """Validate commands and execute them against a shared store."""
 
-    def __init__(self, store: Store) -> None:
-        self._store = store
+    def __init__(self, service: Service) -> None:
+        self._service = service
 
     def execute(self, request: tuple[bytes, ...]) -> CommandResult:
         """Execute one tokenized request without knowing its wire protocol."""
@@ -61,18 +61,31 @@ class CommandProcessor:
             if len(arguments) != 2:
                 return _wrong_argument_count("set")
             key, value = arguments
-            self._store.set(key, value)
+            self._service.set(key, value)
             return SimpleString(b"OK")
 
         if normalized_command == b"GET":
             if len(arguments) != 1:
                 return _wrong_argument_count("get")
-            return BulkString(self._store.get(arguments[0]))
+            return BulkString(self._service.get(arguments[0]))
 
         if normalized_command == b"DEL":
             if not arguments:
                 return _wrong_argument_count("del")
-            return Integer(self._store.delete(tuple(arguments)))
+            return Integer(self._service.delete(tuple(arguments)))
+
+        if normalized_command == b"EXISTS":
+            if not arguments:
+                return _wrong_argument_count("exists")
+            return Integer(self._service.exists(tuple(arguments)))
+
+        if normalized_command == b"INCR":
+            if len(arguments) != 1:
+                return _wrong_argument_count("incr")
+            try:
+                return Integer(self._service.increment(arguments[0]))
+            except InvalidInteger as error:
+                return CommandError(str(error))
 
         return CommandError("unknown command")
 

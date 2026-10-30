@@ -29,3 +29,7 @@ class Store:
                 del self._entries[key]
                 removed += 1
         return removed
+
+    def exists(self, keys: tuple[bytes, ...]) -> int:
+        """Count supplied existing keys, including repeated occurrences."""
+        return sum(key in self._entries for key in keys)

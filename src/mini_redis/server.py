@@ -1,9 +1,11 @@
-"""The synchronous TCP server for Mini Redis."""
+"""Thread-per-client TCP server for Mini Redis."""
 
 from __future__ import annotations
 
+import logging
 import socket
 import threading
+import time
 from contextlib import suppress
 
 from mini_redis.commands import CommandProcessor
@@ -15,14 +17,18 @@ from mini_redis.protocol import (
     IncompleteRequest,
     ProtocolError,
     decode_request,
+    encode_error,
     encode_protocol_error,
     encode_response,
 )
+from mini_redis.service import Service
 from mini_redis.store import Store
+
+logger = logging.getLogger(__name__)
 
 
 class MiniRedisServer:
-    """Serve RESP2 requests to one active client at a time.
+    """Serve ordered RESP2 requests concurrently across client connections.
 
     ``start`` creates the listening socket synchronously. Keeping socket creation
     separate from ``serve_forever`` lets callers discover an operating-system-
@@ -37,15 +43,20 @@ class MiniRedisServer:
         max_buffer_size: int = DEFAULT_MAX_BUFFER_SIZE,
         max_bulk_string_size: int = DEFAULT_MAX_BULK_STRING_SIZE,
         max_array_length: int = DEFAULT_MAX_ARRAY_LENGTH,
+        max_clients: int = 100,
     ) -> None:
+        if max_clients <= 0:
+            raise ValueError("maximum clients must be positive")
+        self._max_clients = max_clients
         self._host = host
         self._port = port
-        self._commands = CommandProcessor(store if store is not None else Store())
+        self._commands = CommandProcessor(Service(store))
         self._max_buffer_size = max_buffer_size
         self._max_bulk_string_size = max_bulk_string_size
         self._max_array_length = max_array_length
         self._listener: socket.socket | None = None
-        self._active_client: socket.socket | None = None
+        self._clients: dict[socket.socket, threading.Thread] = {}
+        self._clients_lock = threading.Lock()
         self._stopping = threading.Event()
 
     @property
@@ -66,7 +77,7 @@ class MiniRedisServer:
         try:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self._host, self._port))
-            listener.listen(1)
+            listener.listen(self._max_clients)
         except OSError:
             listener.close()
             raise
@@ -75,7 +86,7 @@ class MiniRedisServer:
         self._listener = listener
 
     def serve_forever(self) -> None:
-        """Accept and serve clients sequentially until ``close`` is called."""
+        """Accept clients and dispatch workers until ``close`` is called."""
         listener = self._listener
         if listener is None:
             raise RuntimeError("server must be started before it can serve")
@@ -89,29 +100,66 @@ class MiniRedisServer:
                         break
                     raise
 
-                self._active_client = connection
-                try:
-                    self._serve_client(connection)
-                except OSError:
-                    if self._stopping.is_set():
-                        break
-                finally:
-                    self._active_client = None
+                with self._clients_lock:
+                    stopping = self._stopping.is_set()
+                    admitted = not stopping and len(self._clients) < self._max_clients
+                    if admitted:
+                        worker = threading.Thread(
+                            target=self._run_client,
+                            args=(connection,),
+                            name="mini-redis-client",
+                            daemon=False,
+                        )
+                        self._clients[connection] = worker
+                        try:
+                            # Start under the registry lock so close() can only
+                            # observe workers that are safe to join.
+                            worker.start()
+                        except Exception:
+                            del self._clients[connection]
+                            _close_socket(connection)
+                            raise
+                if not admitted:
+                    with connection:
+                        if not stopping:
+                            # A rejected peer must not indefinitely stall accept.
+                            connection.settimeout(0.1)
+                            with suppress(OSError):
+                                connection.sendall(
+                                    encode_error("maximum clients reached")
+                                )
         finally:
             self.close()
 
     def close(self) -> None:
-        """Stop accepting clients and unblock any active socket operation."""
-        self._stopping.set()
+        """Stop admission, unblock client sockets, and join workers."""
+        with self._clients_lock:
+            self._stopping.set()
+            listener = self._listener
+            self._listener = None
+            clients = list(self._clients.items())
 
-        active_client = self._active_client
-        if active_client is not None:
-            _close_socket(active_client)
-
-        listener = self._listener
-        self._listener = None
         if listener is not None:
             _close_socket(listener)
+        for connection, _ in clients:
+            _close_socket(connection)
+
+        deadline = time.monotonic() + 2
+        for _, worker in clients:
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+
+    def _run_client(self, connection: socket.socket) -> None:
+        """Isolate client failures and always release the admission slot."""
+        try:
+            self._serve_client(connection)
+        except OSError:
+            pass  # Disconnects and sockets closed during shutdown are normal.
+        except Exception:
+            logger.exception("unexpected client worker failure")
+        finally:
+            _close_socket(connection)
+            with self._clients_lock:
+                del self._clients[connection]
 
     def _serve_client(self, connection: socket.socket) -> None:
         """Decode and execute complete RESP2 requests from one TCP byte stream."""
@@ -163,4 +211,5 @@ def _close_socket(sock: socket.socket) -> None:
     """Close a socket while treating an already-closed socket as harmless."""
     with suppress(OSError):
         sock.shutdown(socket.SHUT_RDWR)
-    sock.close()
+    with suppress(OSError):
+        sock.close()

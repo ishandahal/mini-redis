@@ -9,12 +9,12 @@ from mini_redis.commands import (
     Integer,
     SimpleString,
 )
-from mini_redis.store import Store
+from mini_redis.service import Service
 
 
 @pytest.fixture
 def commands() -> CommandProcessor:
-    return CommandProcessor(Store())
+    return CommandProcessor(Service())
 
 
 def test_ping_is_case_insensitive_and_rejects_arguments(
@@ -69,3 +69,52 @@ def test_wrong_argument_counts_do_not_mutate(
 def test_unknown_and_empty_commands_return_errors(commands: CommandProcessor) -> None:
     assert commands.execute((b"NOPE",)) == CommandError("unknown command")
     assert commands.execute(()) == CommandError("unknown command")
+
+
+def test_exists_counts_duplicates_and_empty_values(commands: CommandProcessor) -> None:
+    commands.execute((b"SET", b"key", b""))
+    assert commands.execute((b"eXiStS", b"key", b"missing", b"key")) == Integer(2)
+    assert isinstance(commands.execute((b"EXISTS",)), CommandError)
+
+
+@pytest.mark.parametrize(
+    "value", [b"0", b"1", b"-1", b"-9223372036854775808", b"9223372036854775806"]
+)
+def test_incr_accepts_canonical_signed_integers(commands, value) -> None:
+    commands.execute((b"SET", b"key", value))
+    expected = int(value) + 1
+    assert commands.execute((b"iNcR", b"key")) == Integer(expected)
+    assert commands.execute((b"GET", b"key")) == BulkString(str(expected).encode())
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        b"",
+        b"+1",
+        b"01",
+        b"-0",
+        b"-01",
+        b" 1",
+        b"1 ",
+        b"1\n",
+        b"1.0",
+        b"abc",
+        b"\xff",
+        b"9223372036854775807",
+        b"9223372036854775808",
+        b"-9223372036854775809",
+        b"9" * 5000,
+    ],
+)
+def test_incr_errors_preserve_value(commands, value) -> None:
+    commands.execute((b"SET", b"key", value))
+    assert isinstance(commands.execute((b"INCR", b"key")), CommandError)
+    assert commands.execute((b"GET", b"key")) == BulkString(value)
+
+
+def test_incr_missing_key_and_arity(commands: CommandProcessor) -> None:
+    assert commands.execute((b"INCR", b"key")) == Integer(1)
+    assert isinstance(commands.execute((b"INCR",)), CommandError)
+    assert isinstance(commands.execute((b"INCR", b"key", b"extra")), CommandError)
+    assert commands.execute((b"GET", b"key")) == BulkString(b"1")
