@@ -50,7 +50,9 @@ class MiniRedisServer:
         self._max_clients = max_clients
         self._host = host
         self._port = port
-        self._commands = CommandProcessor(Service(store))
+        self._service = Service(store)
+        self._commands = CommandProcessor(self._service)
+        self._maintenance: threading.Thread | None = None
         self._max_buffer_size = max_buffer_size
         self._max_bulk_string_size = max_bulk_string_size
         self._max_array_length = max_array_length
@@ -84,6 +86,19 @@ class MiniRedisServer:
 
         self._stopping.clear()
         self._listener = listener
+        self._maintenance = threading.Thread(
+            target=self._cleanup_loop, name="mini-redis-cleanup", daemon=False
+        )
+        try:
+            self._maintenance.start()
+        except Exception:
+            self._maintenance = None
+            self.close()
+            raise
+
+    def _cleanup_loop(self) -> None:
+        while not self._stopping.wait(0.1):
+            self._service.cleanup(batch_size=100)
 
     def serve_forever(self) -> None:
         """Accept clients and dispatch workers until ``close`` is called."""
@@ -145,6 +160,8 @@ class MiniRedisServer:
             _close_socket(connection)
 
         deadline = time.monotonic() + 2
+        if self._maintenance is not None:
+            self._maintenance.join(timeout=max(0, deadline - time.monotonic()))
         for _, worker in clients:
             worker.join(timeout=max(0, deadline - time.monotonic()))
 

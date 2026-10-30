@@ -27,9 +27,9 @@ class Service:
         self._store = store if store is not None else Store()
         self._lock = threading.Lock()
 
-    def set(self, key: bytes, value: bytes) -> None:
+    def set(self, key: bytes, value: bytes, seconds: int | None = None) -> None:
         with self._lock:
-            self._store.set(key, value)
+            self._store.set(key, value, seconds)
 
     def get(self, key: bytes) -> bytes | None:
         with self._lock:
@@ -57,5 +57,17 @@ class Service:
             if value == MAX_INTEGER:
                 raise InvalidInteger("increment would overflow")
             value += 1
-            self._store.set(key, str(value).encode("ascii"))
+            self._store.set(key, str(value).encode("ascii"), keep_ttl=True)
             return value
+
+    def expire(self, key: bytes, seconds: int) -> int:
+        with self._lock:
+            return self._store.expire(key, seconds)
+
+    def ttl(self, key: bytes) -> int:
+        with self._lock:
+            return self._store.ttl(key)
+
+    def cleanup(self, batch_size: int = 100) -> int:
+        with self._lock:
+            return self._store.cleanup(batch_size)

@@ -39,8 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mini-redis",
         description=(
             "A Redis-inspired server built to learn backend and systems engineering. "
-            "Milestone 4 implements concurrent RESP2 clients around an atomic in-memory "
-            "command core."
+            "Milestone 5 adds key expiration and background cleanup to the concurrent "
+            "in-memory server."
         ),
     )
     parser.add_argument(

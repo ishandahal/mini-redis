@@ -1,9 +1,9 @@
 # Mini Redis: Implementation Plan and Specification
 
-- **Status:** Active living specification; Milestones 0–4 complete
+- **Status:** Active living specification; Milestones 0–5 complete
 - **Target:** Version 1 learning implementation
 - **Language:** Python 3.12+
-- **Last updated:** 2026-10-29
+- **Last updated:** 2026-10-30
 
 Sections 4–15 describe the target version 1 system, not only the features that
 exist today. Section 16 is the implementation tracker. Completed milestones are
@@ -351,7 +351,8 @@ SET key value
 SET key value EX seconds
 ```
 
-- `seconds` must be a positive base-10 integer.
+- `seconds` must contain 1–10 ASCII digits and represent a value from 1 through
+  2,147,483,647; leading zeros are accepted.
 - A successful `SET` returns `OK`.
 - Replacing a key replaces both its value and expiration metadata.
 - `SET` without `EX` removes an existing TTL.
@@ -393,7 +394,8 @@ EXISTS key [key ...]
 EXPIRE key seconds
 ```
 
-- `seconds` must be a positive base-10 integer.
+- `seconds` must contain 1–10 ASCII digits and represent a value from 1 through
+  2,147,483,647; leading zeros are accepted.
 - Return `1` when a TTL is assigned to an existing, unexpired key.
 - Return `0` when the key does not exist or is already expired.
 
@@ -774,20 +776,37 @@ Implementation decisions and lesson:
 - Tests cover concurrent increments, idle clients, blocked response writes,
   admission limits, slot reuse, and joining idle workers during close.
 
-### Milestone 5: Expiration — Not started
+### Milestone 5: Expiration — Complete
 
 Deliver:
 
-- injected clock;
-- `SET ... EX`, `EXPIRE`, and `TTL`;
-- lazy expiration; and
-- active cleanup thread.
+- [x] injected clock;
+- [x] `SET ... EX`, `EXPIRE`, and `TTL`;
+- [x] lazy expiration; and
+- [x] active cleanup thread.
 
 Exit criteria:
 
-- all TTL tests use fake time;
-- expired keys are never observable;
-- replacing a key has the specified TTL behavior.
+- [x] all TTL tests use fake time;
+- [x] expired keys are never observable;
+- [x] replacing a key has the specified TTL behavior.
+
+Implementation decisions and lesson:
+
+- Store entries hold bytes, an optional monotonic deadline, and an optional Unix
+  expiration timestamp. Live deadlines are unaffected by wall-clock changes.
+- Expiration inputs accept 1–10 ASCII digits, including leading zeros, and values
+  from 1 through 2,147,483,647 seconds. This bounded subset rejects invalid or
+  excessive durations before mutation or numeric conversion.
+- Lazy checks make expired keys absent for every operation. Multi-key commands
+  sample time once; `INCR` preserves expiration while plain `SET` clears it.
+- An ordered dictionary allows cleanup to rotate through at most 100 entries per
+  100-millisecond pass without a full key snapshot. Each batch holds the service
+  lock; the maintenance worker is stopped and joined on server close.
+- Fake-clock tests cover exact deadlines, rounding, wall-clock changes, failed
+  mutations, replacement, increment semantics, bounded cleanup, TCP commands,
+  and cleanup worker lifecycle. Background reclamation is never required for
+  observable expiration correctness.
 
 ### Milestone 6: Append-only persistence — Not started
 

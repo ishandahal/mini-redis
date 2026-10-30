@@ -280,3 +280,52 @@ def test_blocked_response_write_does_not_hold_service_lock() -> None:
 def test_invalid_client_limit_fails_before_start(limit) -> None:
     with pytest.raises(ValueError, match="maximum clients must be positive"):
         MiniRedisServer(max_clients=limit)
+
+
+def test_expiration_commands_over_tcp(clock):
+    from mini_redis.store import Store
+
+    with (
+        running_server(store=Store(clock)) as address,
+        socket.create_connection(address, timeout=2) as client,
+    ):
+        client.sendall(
+            encode_request(b"SET", b"key", b"value", b"EX", b"2")
+            + encode_request(b"TTL", b"key")
+            + encode_request(b"EXPIRE", b"key", b"3")
+        )
+        expected = b"+OK\r\n:2\r\n:1\r\n"
+        assert receive_exactly(client, len(expected)) == expected
+        clock.advance(3)
+        client.sendall(encode_request(b"GET", b"key") + encode_request(b"TTL", b"key"))
+        expected = b"$-1\r\n:-2\r\n"
+        assert receive_exactly(client, len(expected)) == expected
+
+
+def test_background_cleanup_reclaims_unread_keys_and_stops(clock):
+    import threading
+
+    from mini_redis.store import Store
+
+    cleaned = threading.Event()
+
+    class ObservedStore(Store):
+        def cleanup(self, batch_size=100):
+            removed = super().cleanup(batch_size)
+            if removed:
+                cleaned.set()
+            return removed
+
+    store = ObservedStore(clock)
+    store.set(b"unread", b"value", 1)
+    clock.advance(1)
+    server = MiniRedisServer(port=0, store=store)
+    server.start()
+    worker = server._maintenance
+    try:
+        assert cleaned.wait(timeout=2)
+        with server._service._lock:
+            assert b"unread" not in store._entries
+    finally:
+        server.close()
+    assert worker is not None and not worker.is_alive()

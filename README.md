@@ -7,7 +7,7 @@ reproduce all of Redis.
 
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
 
-## Current status: Milestone 4
+## Current status: Milestone 5
 
 Mini Redis currently provides:
 
@@ -23,17 +23,18 @@ Mini Redis currently provides:
 - case-insensitive command matching and an error response for unknown commands;
 - an in-memory byte-string store shared across concurrent connections;
 - socket-independent command handling for `PING`, `SET`, `GET`, `DEL`, `EXISTS`,
-  and `INCR`;
+  `INCR`, `EXPIRE`, and `TTL`;
 - compatibility with `redis-cli` for the supported command subset;
 - a shared service lock making each keyspace operation atomic;
 - a configurable maximum of 100 active clients by default;
+- lazy expiration and bounded background cleanup using an injectable clock;
 - tests with pytest; and
 - formatting and linting with Ruff.
 
 Each connection has its own worker and input buffer. An idle client does not
 block other clients. Commands remain ordered within a connection; ordering
-between connections is unspecified. Expiration and persistence belong to later
-milestones. This project is not production-ready and must not be exposed to
+between connections is unspecified. Key expiration is supported; persistence
+belongs to a later milestone. This project is not production-ready and must not be exposed to
 untrusted networks.
 
 ## Development
@@ -158,3 +159,34 @@ The concurrency tests coordinate clients with barriers/events and verify 800
 increments across eight clients without lost updates, continued progress with
 an idle client or blocked response writer, client-limit enforcement and slot
 reuse, and worker cleanup on shutdown.
+
+### Key expiration
+
+Use `SET key value EX seconds` to store a value with a lifetime, `EXPIRE key
+seconds` to assign or replace a lifetime, and `TTL key` to inspect it. For example:
+
+```shell
+redis-cli SET session hello EX 60
+redis-cli TTL session
+redis-cli EXPIRE session 120
+```
+
+Expiration arguments accept 1–10 ASCII digits, including leading zeros, with a
+numeric value from 1 through 2,147,483,647 seconds. Signs, whitespace, zero,
+negative values, and fractions are rejected without changing the key. `EX` is
+case-insensitive; other SET options are unsupported. These are intentional
+Mini Redis limits rather than full Redis compatibility.
+
+`TTL` rounds remaining seconds **up**, returns `-1` for a key with no expiration,
+and `-2` for a missing or expired key. At the exact deadline the key is expired.
+Plain `SET` clears an old expiration; `SET ... EX` replaces it; successful `INCR`
+preserves it. Incrementing an expired key creates a value of `1` with no TTL.
+
+Live expiration uses a monotonic clock, so calendar-clock changes do not change
+an existing lifetime. Entries also record a Unix expiration timestamp for future
+persistence work; data is still entirely in memory and is lost on restart.
+Every key operation checks expiration. A maintenance thread additionally inspects
+up to 100 entries every 100 milliseconds, rotating through the store and taking
+the service lock for just one batch. Cleanup reclaims memory; correctness does
+not depend on it running promptly. Server close stops and joins this worker.
+Expiration tests advance a fake clock instead of waiting for real TTLs.

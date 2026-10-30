@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mini_redis.service import InvalidInteger, Service
+from mini_redis.store import MAX_TTL_SECONDS
 
 
 @dataclass(frozen=True)
@@ -58,11 +59,31 @@ class CommandProcessor:
             return SimpleString(b"PONG")
 
         if normalized_command == b"SET":
-            if len(arguments) != 2:
+            if len(arguments) not in (2, 4):
                 return _wrong_argument_count("set")
-            key, value = arguments
-            self._service.set(key, value)
+            seconds = None
+            if len(arguments) == 4:
+                if arguments[2].upper() != b"EX":
+                    return CommandError("unsupported SET option")
+                seconds = _expiration_seconds(arguments[3])
+                if seconds is None:
+                    return CommandError("invalid expiration seconds")
+            key, value = arguments[:2]
+            self._service.set(key, value, seconds)
             return SimpleString(b"OK")
+
+        if normalized_command == b"EXPIRE":
+            if len(arguments) != 2:
+                return _wrong_argument_count("expire")
+            seconds = _expiration_seconds(arguments[1])
+            if seconds is None:
+                return CommandError("invalid expiration seconds")
+            return Integer(self._service.expire(arguments[0], seconds))
+
+        if normalized_command == b"TTL":
+            if len(arguments) != 1:
+                return _wrong_argument_count("ttl")
+            return Integer(self._service.ttl(arguments[0]))
 
         if normalized_command == b"GET":
             if len(arguments) != 1:
@@ -92,3 +113,11 @@ class CommandProcessor:
 
 def _wrong_argument_count(command: str) -> CommandError:
     return CommandError(f"wrong number of arguments for '{command}' command")
+
+
+def _expiration_seconds(raw: bytes) -> int | None:
+    # ASCII digits only; leading zeros are accepted within this length bound.
+    if not raw or len(raw) > 10 or not raw.isdigit():
+        return None
+    seconds = int(raw)
+    return seconds if 1 <= seconds <= MAX_TTL_SECONDS else None
