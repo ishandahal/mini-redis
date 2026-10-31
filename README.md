@@ -1,13 +1,14 @@
 # Mini Redis
 
+> **Vibe-coded, manually tested.** This project was built almost entirely with
+> AI-generated code. I manually tested it to check that it behaved as expected
+> in the scenarios I tried, but I have not reviewed the implementation in depth.
+> It is a learning experiment, not thoroughly reviewed or production-ready software.
+
 Mini Redis is a small Redis-inspired server built as a learning project. Its
 goal is to explore TCP servers, streaming protocols, concurrency, expiration,
 persistence, failure handling, testing, and observability without attempting to
 reproduce all of Redis.
-
-**Development note:** This project is almost entirely vibe coded, and the
-codebase has not been thoroughly scrutinized. Treat it as a learning experiment,
-not carefully reviewed or production-ready software.
 
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
 See [the architecture walkthrough and invariant coverage](docs/ARCHITECTURE.md)
