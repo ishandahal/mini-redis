@@ -10,8 +10,11 @@ codebase has not been thoroughly scrutinized. Treat it as a learning experiment,
 not carefully reviewed or production-ready software.
 
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
+See [the architecture walkthrough and invariant coverage](docs/ARCHITECTURE.md)
+for how the finished code fits together. “Version 1” refers to the learning
+scope; the package version remains `0.1.0`.
 
-## Current status: Milestone 7
+## Current status: Version 1 scope complete (Milestones 0–8)
 
 Mini Redis currently provides:
 
@@ -269,7 +272,8 @@ settings), or use these CLI options:
 | `--max-array-length` | `1024` | Maximum request elements |
 | `--log-level` | `INFO` | DEBUG, INFO, WARNING, ERROR, or CRITICAL |
 
-Durations must be finite and positive. Receiving more bytes resets the idle wait;
+Durations must be finite, positive, and no greater than the smaller of
+`threading.TIMEOUT_MAX` and 2,147,483,647 seconds. Receiving more bytes resets the idle wait;
 this is not a total request deadline. Executing commands are not timed out by the
 socket timeout. A client that stops reading responses is disconnected if a write
 times out. Expiration still uses the injected clock independently of socket waits.
@@ -288,3 +292,52 @@ persistence records count successfully synchronized new records, excluding repla
 Byte reads count received input; byte writes count completed response writes
 (including rejection/error replies), excluding partial failed writes. Counters
 also track command/protocol errors, rejected connections, and read/write timeouts.
+
+
+## Self-contained demonstration
+
+After `uv sync --dev`, run:
+
+```shell
+uv run python scripts/demo.py
+```
+
+The script launches its own server processes on OS-assigned loopback ports and
+uses a temporary append-only file. It demonstrates fragmented requests, binary
+values, pipelining, command errors, four concurrent incrementing clients, a real
+one-second expiration, SIGTERM shutdown, and recovery after restart. Each step
+checks its responses and prints its result. It requires no redis-cli or existing
+server and removes its temporary files at the end. Failures print server logs
+and produce a nonzero exit. The signal demo targets Unix-like systems.
+
+## Limitations and failure model
+
+- **Local learning use:** no authentication, ACLs, or TLS. All connected clients
+  share one keyspace. IPv4 only. Do not expose the server to untrusted networks.
+- **A deliberate Redis subset:** byte-string values only, eight commands, and
+  restricted RESP2 requests. TTL rounds up; expiration accepts only positive
+  whole seconds within the documented range. This is not full Redis compatibility.
+- **Resource limits are partial:** clients and requests have limits, but total
+  keyspace memory and append-only file size do not. No eviction or compaction.
+  An idle timeout is not a total request deadline; a trickling client can retain
+  its slot. Fragmented input is reparsed, so adversarial input can consume CPU.
+- **Persistence has explicit boundaries:** one process per log, no file locking,
+  checksums, snapshots, or replication. Replay treats the local log as trusted and
+  does not apply public request-size limits. Corruption that forms valid records
+  is not detectable. Back up a damaged file before manual recovery.
+- **Acknowledgments can be ambiguous:** synchronous flush/fsync precedes success,
+  but a durable write may outlive a missing/error response. Errors disable further
+  mutations, not reads. Retrying INCR after a lost reply can increment twice.
+  Memory-only mode loses all state on restart; fsync is not a hardware guarantee.
+- **Shutdown can fail:** active operations may complete after sockets close. A
+  grace-period timeout forces CLI exit status 1 and uses crash-recovery semantics;
+  it cannot make a blocked disk operation finish safely. Startup replay itself
+  has no deadline. Embedded callers must manage unfinished cleanup on timeout.
+- **Throughput is intentionally limited:** thread per client and one coarse
+  service lock, including synchronous disk writes. No performance target or
+  guarantee of fairness. No broad cross-platform or hardware-failure validation.
+
+Deferred extensions are authentication/ACLs, pub/sub, transactions, snapshots,
+an asynchronous transport, more data types, and alternative fsync policies with
+benchmarks. Replication and clustering are outside this version's scope. See
+[PLAN.md section 17](PLAN.md#17-stretch-goals) before adding further features.

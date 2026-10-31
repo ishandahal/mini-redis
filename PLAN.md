@@ -1,13 +1,13 @@
 # Mini Redis: Implementation Plan and Specification
 
-- **Status:** Active living specification; Milestones 0–7 complete
+- **Status:** Version 1 scope complete; Milestones 0–8 complete
 - **Target:** Version 1 learning implementation
 - **Language:** Python 3.12+
 - **Last updated:** 2026-10-30
 
-Sections 4–15 describe the target version 1 system, not only the features that
-exist today. Section 16 is the implementation tracker. Completed milestones are
-marked with checked boxes; later milestones are labeled `Not started`.
+Sections 4–15 specify the completed version 1 scope. Section 16 records its
+implementation history. The actual architecture, final review, and invariant
+coverage are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## 1. Purpose
 
@@ -227,9 +227,9 @@ It must not interpret external client permissions or send responses.
 - Supply wall-clock Unix time for expiration persisted across restarts.
 - Be replaceable with a deterministic fake in tests.
 
-### 5.2 Suggested source layout
+### 5.2 Implemented source layout
 
-The exact filenames may evolve, but responsibilities should remain separated:
+Responsibilities are separated as follows (errors live with their owning component):
 
 ```text
 pyproject.toml
@@ -244,10 +244,14 @@ src/mini_redis/
     store.py
     persistence.py
     clock.py
-    errors.py
+    metrics.py
 tests/
-    unit/
-    integration/
+    test_*.py
+    conftest.py
+scripts/
+    demo.py
+docs/
+    ARCHITECTURE.md
 ```
 
 Runtime code should use the Python standard library. `pytest` is the initial
@@ -891,20 +895,33 @@ Implementation decisions and lesson:
   slot reuse, active commands exceeding idle timeouts, delayed and permanently
   stalled persistence, counter concurrency, and value-free logs.
 
-### Milestone 8: Review and explanation — Not started
+### Milestone 8: Review and explanation — Complete
 
 Deliver:
 
-- architecture documentation reflecting the code that actually exists;
-- a limitations and failure-model section in the README;
-- a manual demonstration script; and
-- a final code and test review.
+- [x] architecture documentation reflecting the code that actually exists;
+- [x] a limitations and failure-model section in the README;
+- [x] a manual demonstration script; and
+- [x] a final code and test review.
 
 Exit criteria:
 
-- the implementer can trace a command from socket bytes through response bytes;
-- every core invariant has at least one test;
-- deferred work is named rather than hidden behind TODOs.
+- [x] the implementer can trace a command from socket bytes through response bytes;
+- [x] every core invariant has at least one test;
+- [x] deferred work is named rather than hidden behind TODOs.
+
+Review outcomes:
+
+- `docs/ARCHITECTURE.md` traces a command end to end, describes ownership and
+  lock ordering, and maps all fourteen core invariants to representative tests
+  and review evidence. It distinguishes the runtime flow from Python imports.
+- README documents the scoped completion, limitations, failure model, demo,
+  and explicitly deferred work while retaining the vibe-coding disclosure.
+- `scripts/demo.py` checks real TCP requests, concurrent increments, expiration,
+  signal shutdown, and append-only replay in isolated temporary server processes.
+- Review fixed unsupported huge timeout/backlog settings and propagation of
+  unexpected cleanup failures, with regression tests. This is a focused code
+  review, not an exhaustive audit or production-readiness certification.
 
 ## 17. Stretch Goals
 

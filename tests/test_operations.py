@@ -296,3 +296,40 @@ def test_metrics_updates_are_thread_safe():
     assert snapshot["commands_PING"] == 8000
     snapshot["commands_PING"] = 0
     assert metrics.snapshot()["commands_PING"] == 8000
+
+
+@pytest.mark.parametrize(
+    "name", ["idle_timeout", "expiration_interval", "shutdown_timeout"]
+)
+def test_unrepresentable_timeout_is_rejected_before_start(name):
+    from mini_redis.config import MAX_TIMEOUT
+
+    for value in (MAX_TIMEOUT * 2, 10**1000):
+        with pytest.raises(ValueError, match=name):
+            Config(**{name: value})
+
+
+def test_unrepresentable_client_limit_is_rejected():
+    with pytest.raises(ValueError, match="backlog"):
+        Config(max_clients=2**31)
+
+
+def test_cleanup_failure_is_reported_to_server_caller(monkeypatch, caplog):
+    server = MiniRedisServer(port=0, expiration_interval=0.001)
+    failed = threading.Event()
+
+    def fail_cleanup(batch_size):
+        failed.set()
+        raise RuntimeError("injected cleanup failure")
+
+    monkeypatch.setattr(server._service, "cleanup", fail_cleanup)
+    server.start()
+    try:
+        assert failed.wait(2)
+        with pytest.raises(OSError, match="expiration cleanup failed"):
+            server.serve_forever()
+        assert "expiration cleanup failed" in caplog.text
+        assert server._closed.is_set()
+        assert not server._maintenance.is_alive()
+    finally:
+        server.close()

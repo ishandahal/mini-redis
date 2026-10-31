@@ -1,7 +1,11 @@
 """Validated settings shared by the CLI and embedded server."""
 
 import math
+import threading
 from dataclasses import dataclass
+
+# Keep socket and threading timeout conversion within platform-supported ranges.
+MAX_TIMEOUT = min(threading.TIMEOUT_MAX, 2**31 - 1)
 
 
 @dataclass(frozen=True)
@@ -39,11 +43,21 @@ class Config:
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
+                or not 0 < value <= MAX_TIMEOUT
                 or not math.isfinite(value)
-                or value <= 0
             ):
-                raise ValueError(f"{name} must be finite and positive")
-        if self.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+                raise ValueError(
+                    f"{name} must be finite and between 0 (exclusive) and {MAX_TIMEOUT}"
+                )
+        if self.max_clients > 2**31 - 1:
+            raise ValueError("maximum clients exceeds supported socket backlog")
+        if not isinstance(self.log_level, str) or self.log_level not in {
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR",
+            "CRITICAL",
+        }:
             raise ValueError("invalid log level")
         if self.appendonly is not None and (
             not isinstance(self.appendonly, str)

@@ -86,6 +86,7 @@ class MiniRedisServer:
         self._service = Service(self._store)
         self._commands = CommandProcessor(self._service)
         self._maintenance: threading.Thread | None = None
+        self._maintenance_error: Exception | None = None
         self._max_buffer_size = max_buffer_size
         self._max_bulk_string_size = max_bulk_string_size
         self._max_array_length = max_array_length
@@ -158,7 +159,8 @@ class MiniRedisServer:
         try:
             while not self._stopping.wait(self.config.expiration_interval):
                 self._service.cleanup(batch_size=100)
-        except Exception:
+        except Exception as error:
+            self._maintenance_error = error
             logger.exception("expiration cleanup failed")
             self.request_stop()
 
@@ -213,6 +215,8 @@ class MiniRedisServer:
                                 self._send(
                                     connection, encode_error("maximum clients reached")
                                 )
+            if self._maintenance_error is not None:
+                raise OSError("expiration cleanup failed") from self._maintenance_error
         finally:
             self.close()
 
