@@ -7,6 +7,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 from mini_redis.clock import Clock, SystemClock
+from mini_redis.metrics import Metrics
 
 # Bound arithmetic and document a deliberately smaller subset than Redis.
 MAX_TTL_SECONDS = 2**31 - 1
@@ -23,6 +24,7 @@ class Store:
     """Own entries; callers serialize access through Service."""
 
     def __init__(self, clock: Clock | None = None) -> None:
+        self.metrics = Metrics()
         self._clock = clock if clock is not None else SystemClock()
         # Rotation lets cleanup inspect bounded batches without full snapshots
         # or an iterator invalidated by concurrent commands between batches.
@@ -91,6 +93,7 @@ class Store:
         entry = self._entries.get(key)
         if entry is not None and entry.deadline is not None and now >= entry.deadline:
             del self._entries[key]
+            self.metrics.add("expired_keys_removed")
             return None
         return entry
 
@@ -140,6 +143,7 @@ class Store:
             key, entry = self._entries.popitem(last=False)
             if entry.deadline is not None and now >= entry.deadline:
                 removed += 1
+                self.metrics.add("expired_keys_removed")
             else:
                 self._entries[key] = entry
         return removed

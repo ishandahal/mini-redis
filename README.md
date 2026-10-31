@@ -5,9 +5,13 @@ goal is to explore TCP servers, streaming protocols, concurrency, expiration,
 persistence, failure handling, testing, and observability without attempting to
 reproduce all of Redis.
 
+**Development note:** This project is almost entirely vibe coded, and the
+codebase has not been thoroughly scrutinized. Treat it as a learning experiment,
+not carefully reviewed or production-ready software.
+
 The behavior and implementation sequence are defined in [PLAN.md](PLAN.md).
 
-## Current status: Milestone 6
+## Current status: Milestone 7
 
 Mini Redis currently provides:
 
@@ -29,6 +33,7 @@ Mini Redis currently provides:
 - a configurable maximum of 100 active clients by default;
 - lazy expiration and bounded background cleanup using an injectable clock;
 - optional append-only persistence with synchronous disk writes and startup replay;
+- validated configuration, idle timeouts, signal-driven shutdown, and operational counters;
 - tests with pytest; and
 - formatting and linting with Ruff.
 
@@ -131,8 +136,8 @@ service owns the store and holds one lock for each complete operation, including
 multi-key operations and the entire read/modify/write sequence of `INCR`.
 Socket reads and writes occur outside that lock. Worker failures are isolated,
 and disconnects release their client slot. Closing the server unblocks client
-sockets and joins workers with a shared two-second wait budget. Full
-signal-driven graceful shutdown remains milestone 7.
+sockets and waits for workers and persistence with a configurable two-second
+grace period. See operational behavior below.
 
 Set a different client limit with:
 
@@ -142,8 +147,7 @@ uv run mini-redis --port 6380 --max-clients 20
 
 When all slots are occupied, an additional connection receives
 `-ERR maximum clients reached` and closes. Existing clients keep working. The
-limit must be a positive integer. Idle timeouts are not implemented yet, so an
-idle connection occupies its slot until it disconnects or the server closes.
+limit must be a positive integer. Idle connections are closed after 300 seconds by default, releasing their slots.
 
 `EXISTS key [key ...]` counts supplied existing keys, including duplicates.
 For example, if `key` exists, `EXISTS key key missing` returns `2`.
@@ -183,7 +187,7 @@ Plain `SET` clears an old expiration; `SET ... EX` replaces it; successful `INCR
 preserves it. Incrementing an expired key creates a value of `1` with no TTL.
 
 Live expiration uses a monotonic clock, so calendar-clock changes do not change
-an existing lifetime. Entries also record a Unix expiration timestamp for future
+an existing lifetime. Entries also record a Unix expiration timestamp for
 persistence. Without `--appendonly`, data is entirely in memory and lost on restart.
 Every key operation checks expiration. A maintenance thread additionally inspects
 up to 100 entries every 100 milliseconds, rotating through the store and taking
@@ -228,7 +232,59 @@ or unacknowledged mutation may nevertheless appear after restart if its record
 reached disk: callers must not assume an error proves the write never happened.
 This is not an exactly-once guarantee or a hardware-level durability guarantee.
 
-Closing the server closes the log under the service lock. An in-progress disk
-operation must finish before the file can close; a stalled filesystem can exceed
-the existing worker join budget. Full signal handling and shutdown hardening
-remain milestone 7.
+Closing the server closes the log under the service lock after workers finish.
+An in-progress disk operation must finish before the file can close. The shutdown
+policy below explicitly handles an exceeded grace period.
+
+
+### Operational behavior
+
+`SIGINT` (Ctrl-C) and `SIGTERM` request the same idempotent shutdown. The listener
+checks the request within its 100 ms accept polling interval, stops admission,
+and closes client sockets to unblock reads and writes. Already executing commands
+finish, while further pipelined commands are not started. A command may finish
+without its client receiving the reply. Cleanup and client threads are joined,
+then the append-only file closes and the server logs a final counter summary.
+
+The grace period defaults to two seconds. Python cannot cancel a thread blocked
+inside filesystem I/O. If the grace period expires, the CLI logs a critical error
+and forces process exit with status 1; this is an unsuccessful shutdown, with the
+same recovery/acknowledgment ambiguity as a crash. Normal shutdown exits with
+status 0. OS-level termination timing remains outside the application's control.
+For embedded use, `close()` raises `TimeoutError` instead of killing the process;
+non-daemon cleanup continues and callers can wait or retry `close()`. A closed
+server instance cannot be restarted; create a new instance.
+
+Configuration is validated by an immutable `Config` object before serving clients.
+Pass `config=Config(...)` when embedding (it takes precedence over constructor
+settings), or use these CLI options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--idle-timeout` | `300` | Seconds waiting for more socket input; also bounds response writes |
+| `--expiration-interval` | `0.1` | Seconds between bounded cleanup passes |
+| `--shutdown-timeout` | `2` | Seconds allowed for coordinated shutdown |
+| `--max-buffer-size` | `1048576` | Maximum unread request bytes per client |
+| `--max-bulk-string-size` | `524288` | Maximum bytes in one bulk string (zero is allowed) |
+| `--max-array-length` | `1024` | Maximum request elements |
+| `--log-level` | `INFO` | DEBUG, INFO, WARNING, ERROR, or CRITICAL |
+
+Durations must be finite and positive. Receiving more bytes resets the idle wait;
+this is not a total request deadline. Executing commands are not timed out by the
+socket timeout. A client that stops reading responses is disconnected if a write
+times out. Expiration still uses the injected clock independently of socket waits.
+
+Logs include timestamps, severity, component, and event details. They explain
+startup, replay, recovery, limits, protocol errors, timeouts, persistence errors,
+and shutdown. Connection lifecycle messages are at DEBUG. Stored keys/values and
+unrecognized command text are not included in normal logs.
+
+Thread-safe counters are available from `server.metrics.snapshot()` and logged
+as JSON at normal shutdown. Total connections includes rejected connections;
+current connections counts admitted workers. Commands are counted by supported
+name, with unknown names grouped into `UNKNOWN` to bound memory use. Keyspace
+hits/misses count GET results. Expired-key removal counts lazy and active cleanup;
+persistence records count successfully synchronized new records, excluding replay.
+Byte reads count received input; byte writes count completed response writes
+(including rejection/error replies), excluding partial failed writes. Counters
+also track command/protocol errors, rejected connections, and read/write timeouts.

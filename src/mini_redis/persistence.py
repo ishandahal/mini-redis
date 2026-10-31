@@ -8,6 +8,7 @@ import re
 import sys
 from pathlib import Path
 
+from mini_redis.metrics import Metrics
 from mini_redis.store import Entry, Store
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,8 @@ def encode_record(parts: tuple[bytes, ...]) -> bytes:
 class AppendOnlyLog:
     """Owned by one service; calls are serialized by its operation lock."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, metrics: Metrics | None = None) -> None:
+        self.metrics = metrics if metrics is not None else Metrics()
         self.path = Path(path)
         self._file = self.path.open("a+b")
         self._failed = False
@@ -123,6 +125,7 @@ class AppendOnlyLog:
             if self._file.write(record) != len(record):
                 raise OSError("short append-only write")
             self._sync()
+            self.metrics.add("persistence_records_written")
         except OSError as error:
             self._failed = True
             logger.exception("persistence write failed; mutations disabled")

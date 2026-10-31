@@ -43,7 +43,11 @@ class Service:
 
     def get(self, key: bytes) -> bytes | None:
         with self._lock:
-            return self._store.get(key)
+            value = self._store.get(key)
+            self._store.metrics.add(
+                "keyspace_misses" if value is None else "keyspace_hits"
+            )
+            return value
 
     def delete(self, keys: tuple[bytes, ...]) -> int:
         with self._lock:

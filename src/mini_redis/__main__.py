@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import logging
+import os
+import signal
 from collections.abc import Sequence
 
 from mini_redis import __version__
+from mini_redis.config import Config
 from mini_redis.server import MiniRedisServer
 
 
@@ -39,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mini-redis",
         description=(
             "A Redis-inspired server built to learn backend and systems engineering. "
-            "Milestone 6 adds optional append-only persistence to the concurrent "
+            "Milestone 7 adds operational hardening to the persistent "
             "in-memory server."
         ),
     )
@@ -68,6 +71,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--appendonly", metavar="PATH", help="durable append-only log path"
     )
+    parser.add_argument("--idle-timeout", type=float, default=300.0, metavar="SECONDS")
+    parser.add_argument(
+        "--expiration-interval", type=float, default=0.1, metavar="SECONDS"
+    )
+    parser.add_argument(
+        "--shutdown-timeout", type=float, default=2.0, metavar="SECONDS"
+    )
+    parser.add_argument("--max-buffer-size", type=int, default=1024 * 1024)
+    parser.add_argument("--max-bulk-string-size", type=int, default=512 * 1024)
+    parser.add_argument("--max-array-length", type=int, default=1024)
+    parser.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+        default="INFO",
+    )
     return parser
 
 
@@ -75,28 +93,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the Mini Redis command-line interface."""
     parser = build_parser()
     arguments = parser.parse_args(argv)
-    server = MiniRedisServer(
-        host=arguments.host,
-        port=arguments.port,
-        max_clients=arguments.max_clients,
-        appendonly=arguments.appendonly,
+    try:
+        config = Config(**vars(arguments))
+    except ValueError as error:
+        parser.error(str(error))
+    logging.basicConfig(
+        level=config.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
+    logger = logging.getLogger(__name__)
+    server = MiniRedisServer(config=config)
+    previous = {}
 
+    def stop(signum, frame):
+        server.request_stop()
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous[signum] = signal.signal(signum, stop)
     try:
-        server.start()
-    except OSError as error:
-        print(f"mini-redis: unable to start server: {error}", file=sys.stderr)
-        return 1
-
-    host, port = server.address
-    print(f"Mini Redis listening on {host}:{port}", flush=True)
-
-    try:
+        try:
+            server.start()
+        except OSError as error:
+            logger.error("unable to start server: %s", error)
+            return 1
+        host, port = server.address
+        print(f"Mini Redis listening on {host}:{port}", flush=True)
         server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nMini Redis stopped", file=sys.stderr)
+    except TimeoutError:
+        # Python cannot cancel a thread stuck in filesystem I/O. Do not hang
+        # interpreter shutdown on its non-daemon worker after the grace period.
+        logger.critical("shutdown deadline exceeded; forcing unsuccessful exit")
+        os._exit(1)
+    except OSError as error:
+        logger.error("server failed: %s", error)
+        return 1
     finally:
-        server.close()
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
     return 0
 

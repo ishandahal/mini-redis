@@ -1,6 +1,6 @@
 # Mini Redis: Implementation Plan and Specification
 
-- **Status:** Active living specification; Milestones 0–6 complete
+- **Status:** Active living specification; Milestones 0–7 complete
 - **Target:** Version 1 learning implementation
 - **Language:** Python 3.12+
 - **Last updated:** 2026-10-30
@@ -573,6 +573,12 @@ On `SIGINT` or `SIGTERM`, the server should:
 6. Flush and close the append-only file.
 7. Emit a final operational summary and exit.
 
+The grace period covers joins and persistence closure. If it expires, embedded
+callers receive `TimeoutError` while cleanup continues. The CLI logs the timeout
+and forces an unsuccessful exit (status 1), using crash-recovery semantics rather
+than claiming a clean flush. Python cannot cancel blocked filesystem operations;
+OS-level termination timing is outside this guarantee.
+
 The design must not depend on daemon threads being killed during interpreter
 exit. Tests must prove that the server releases its port and leaves a replayable
 log after shutdown.
@@ -843,23 +849,47 @@ Implementation decisions and lesson:
 - The log is single-process, has no compaction, and synchronous disk operations can
   delay shutdown beyond the worker join budget. Operational hardening remains next.
 
-### Milestone 7: Operational hardening — Not started
+### Milestone 7: Operational hardening — Complete
 
 Deliver:
 
-- graceful signal-driven shutdown;
-- connection timeouts;
-- structured, useful logging;
-- operational counters;
-- configuration validation; and
-- end-to-end failure tests.
+- [x] graceful signal-driven shutdown;
+- [x] connection timeouts;
+- [x] structured, useful logging;
+- [x] operational counters;
+- [x] configuration validation; and
+- [x] end-to-end failure tests.
 
 Exit criteria:
 
-- shutdown is bounded with idle and active clients;
-- the port and file handles are released;
-- expected client mistakes do not produce server crashes;
-- logs explain startup, recovery, important failures, and shutdown.
+- [x] shutdown is bounded with idle and active clients;
+- [x] the port and file handles are released;
+- [x] expected client mistakes do not produce server crashes;
+- [x] logs explain startup, recovery, important failures, and shutdown.
+
+Implementation decisions and lesson:
+
+- An immutable validated configuration supplies limits, finite positive timeouts,
+  cleanup cadence, and logging level; CLI validation precedes serving clients.
+- Signal handlers only set a stop-request flag. The accept loop polls at 100 ms,
+  then one shared shutdown worker closes sockets, joins workers, and closes the
+  log. Concurrent/repeated close calls share that operation.
+- The configurable two-second grace period includes worker joins and log closure.
+  A stalled filesystem cannot be safely interrupted in Python. On deadline expiry,
+  embedded callers receive TimeoutError while non-daemon cleanup continues; the
+  CLI logs a critical event and exits with status 1. This is explicitly a forced,
+  unsuccessful shutdown with crash-recovery semantics, not a clean flush promise.
+  OS-level process termination timing cannot be guaranteed by application code.
+- Socket read/write timeouts reclaim abandoned connections without interrupting
+  an executing command. Incoming bytes reset the idle wait; total request time
+  is not bounded.
+- Standard logging records operational events without stored values. Thread-safe
+  counters use a fixed command-name vocabulary; GET defines hits/misses, and
+  completed response writes define bytes written. Normal shutdown emits JSON
+  counters, also available as an embedded snapshot.
+- Tests cover both process signals, port release, replay after termination, idle
+  slot reuse, active commands exceeding idle timeouts, delayed and permanently
+  stalled persistence, counter concurrency, and value-free logs.
 
 ### Milestone 8: Review and explanation — Not started
 
@@ -909,7 +939,8 @@ These invariants govern implementation and review:
 10. One client's failure does not crash the server or corrupt another client.
 11. The store has no dependency on networking or RESP.
 12. Tests control time; they do not wait for real TTLs to pass.
-13. Graceful shutdown has a bounded completion path.
+13. Shutdown has a bounded grace period and an explicit unsuccessful-exit path;
+    a stalled OS operation cannot be promised a graceful completion.
 14. Values and secrets are not emitted in normal logs.
 
 Any implementation choice that violates an invariant requires an explicit
